@@ -17,6 +17,11 @@ LOG_MODULE_REGISTER(golioth_system, CONFIG_GOLIOTH_SYSTEM_CLIENT_LOG_LEVEL);
 
 #define RX_TIMEOUT							\
 	K_SECONDS(CONFIG_GOLIOTH_SYSTEM_CLIENT_RX_TIMEOUT_SEC)
+#define RX_TIMEOUT_SECS						\
+	CONFIG_GOLIOTH_SYSTEM_CLIENT_RX_TIMEOUT_SEC
+
+#define CLIENT_START_BLOCKING				\
+	IS_ENABLED(CONFIG_GOLIOTH_SYSTEM_CLIENT_START_BLOCKING)
 
 #define USE_EVENTFD							\
 	IS_ENABLED(CONFIG_GOLIOTH_SYSTEM_CLIENT_TIMEOUT_USING_EVENTFD)
@@ -200,6 +205,27 @@ static int client_connect(struct golioth_client *client)
 	return 0;
 }
 
+/* Applicable when CLIENT_START_BLOCKING is enabled */
+K_SEM_DEFINE(sys_client_conn_resolved,0,1);
+
+K_SEM_DEFINE(sys_client_started,0,1);
+static struct k_poll_event sys_client_poll_start =
+    K_POLL_EVENT_STATIC_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE,
+                                    K_POLL_MODE_NOTIFY_ONLY,
+                                    &sys_client_started, 0);
+
+/**
+ * @brief Waits until system-client is started.
+ *
+ * @note Returns immediately once @ref golioth_system_client_start is called.
+ * @ref golioth_system_client_stop reverses this non-blocking effect.
+*/
+static void wait_for_client_start(void)
+{
+	k_poll(&sys_client_poll_start,1,K_FOREVER);
+	sys_client_poll_start.state = K_POLL_STATE_NOT_READY;
+}
+
 static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 {
 	struct golioth_client *client = arg1;
@@ -209,6 +235,9 @@ static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 
 	while (true) {
 		if (client->sock < 0) {
+			LOG_DBG("Waiting for client to be started");
+			wait_for_client_start();
+
 			LOG_INF("Starting connect");
 			err = client_connect(client);
 			if (err) {
@@ -227,12 +256,15 @@ static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 			}
 
 			LOG_INF("Client connected!");
+			if(CLIENT_START_BLOCKING) {
+				k_sem_give(&sys_client_conn_resolved);
+			}
 		}
 
 		if (USE_EVENTFD) {
 			ret = zsock_poll(fds, ARRAY_SIZE(fds), -1);
 		} else {
-			ret = zsock_poll(&fds[POLLFD_SOCKET], 1, 30 * 1000);
+			ret = zsock_poll(&fds[POLLFD_SOCKET], 1, RX_TIMEOUT_SECS * 1000);
 		}
 
 		if (ret < 0) {
@@ -241,7 +273,7 @@ static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 		}
 
 		if (ret == 0) {
-			LOG_ERR("Timeout in poll");
+			LOG_INF("Timeout in poll");
 			golioth_disconnect(client);
 			continue;
 		}
@@ -271,11 +303,20 @@ static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 
 K_THREAD_DEFINE(golioth_system, 2048, golioth_system_client_main,
 		GOLIOTH_SYSTEM_CLIENT_GET(), NULL, NULL,
-		K_LOWEST_APPLICATION_THREAD_PRIO, 0, SYS_FOREVER_MS);
+		K_LOWEST_APPLICATION_THREAD_PRIO, 0, 0);
 
 void golioth_system_client_start(void)
 {
-	k_thread_start(golioth_system);
+	k_sem_give(&sys_client_started);
+
+	if(CLIENT_START_BLOCKING) {
+		k_sem_take(&sys_client_conn_resolved,K_SECONDS(30));
+	}
+}
+
+void golioth_system_client_stop(void)
+{
+	k_sem_take(&sys_client_started,K_NO_WAIT);
 }
 
 #if defined(CONFIG_GOLIOTH_SYSTEM_SETTINGS) &&	\
