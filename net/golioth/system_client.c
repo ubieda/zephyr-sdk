@@ -20,9 +20,6 @@ LOG_MODULE_REGISTER(golioth_system, CONFIG_GOLIOTH_SYSTEM_CLIENT_LOG_LEVEL);
 #define RX_TIMEOUT_SECS						\
 	CONFIG_GOLIOTH_SYSTEM_CLIENT_RX_TIMEOUT_SEC
 
-#define CLIENT_START_BLOCKING				\
-	IS_ENABLED(CONFIG_GOLIOTH_SYSTEM_CLIENT_START_BLOCKING)
-
 #define USE_EVENTFD							\
 	IS_ENABLED(CONFIG_GOLIOTH_SYSTEM_CLIENT_TIMEOUT_USING_EVENTFD)
 
@@ -205,9 +202,6 @@ static int client_connect(struct golioth_client *client)
 	return 0;
 }
 
-/* Applicable when CLIENT_START_BLOCKING is enabled */
-K_SEM_DEFINE(sys_client_conn_resolved,0,1);
-
 K_SEM_DEFINE(sys_client_started,0,1);
 static struct k_poll_event sys_client_poll_start =
     K_POLL_EVENT_STATIC_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE,
@@ -256,9 +250,6 @@ static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 			}
 
 			LOG_INF("Client connected!");
-			if(CLIENT_START_BLOCKING) {
-				k_sem_give(&sys_client_conn_resolved);
-			}
 		}
 
 		if (USE_EVENTFD) {
@@ -308,10 +299,6 @@ K_THREAD_DEFINE(golioth_system, 2048, golioth_system_client_main,
 void golioth_system_client_start(void)
 {
 	k_sem_give(&sys_client_started);
-
-	if(CLIENT_START_BLOCKING) {
-		k_sem_take(&sys_client_conn_resolved,K_SECONDS(30));
-	}
 }
 
 void golioth_system_client_stop(void)
