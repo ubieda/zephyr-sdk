@@ -108,6 +108,10 @@ config GOLIOTH_SYSTEM_CLIENT_TIMEOUT_USING_POLL
 
 endchoice
 
+config EVENTFD_MAX
+	int "Maximum number of eventfd's"
+	default 2 if GOLIOTH_SYSTEM_CLIENT_TIMEOUT_USING_EVENTFD
+
 config GOLIOTH_SYSTEM_SETTINGS
 	bool "Load credentials from persistent settings"
 	depends on SETTINGS

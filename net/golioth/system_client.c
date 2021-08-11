@@ -41,6 +41,7 @@ LOG_MODULE_REGISTER(golioth_system, CONFIG_GOLIOTH_SYSTEM_CLIENT_LOG_LEVEL);
 
 enum pollfd_type {
 	POLLFD_EVENT_RECONNECT,
+	POLLFD_EVENT_DISCONNECT,
 	POLLFD_SOCKET,
 	NUM_POLLFDS,
 };
@@ -146,6 +147,8 @@ static int client_initialize(struct golioth_client *client)
 	if (USE_EVENTFD) {
 		fds[POLLFD_EVENT_RECONNECT].fd = eventfd(0, EFD_NONBLOCK);
 		fds[POLLFD_EVENT_RECONNECT].events = ZSOCK_POLLIN;
+		fds[POLLFD_EVENT_DISCONNECT].fd = eventfd(0, EFD_NONBLOCK);
+		fds[POLLFD_EVENT_DISCONNECT].events = ZSOCK_POLLIN;
 	}
 
 	if (IS_ENABLED(CONFIG_LOG_BACKEND_GOLIOTH)) {
@@ -277,6 +280,15 @@ static void golioth_system_client_main(void *arg1, void *arg2, void *arg3)
 			continue;
 		}
 
+		if (USE_EVENTFD && fds[POLLFD_EVENT_DISCONNECT].revents) {
+			(void)eventfd_read(fds[POLLFD_EVENT_DISCONNECT].fd,
+					   &eventfd_value);
+			LOG_INF("Disconnect request");
+			k_work_cancel_delayable(&rx_timeout);
+			golioth_disconnect(client);
+			continue;
+		}
+
 		if (fds[POLLFD_SOCKET].revents) {
 			if (USE_EVENTFD) {
 				/* Restart timer */
@@ -304,6 +316,10 @@ void golioth_system_client_start(void)
 void golioth_system_client_stop(void)
 {
 	k_sem_take(&sys_client_started,K_NO_WAIT);
+
+	if(USE_EVENTFD) {
+		eventfd_write(fds[POLLFD_EVENT_DISCONNECT].fd, 1);
+	}
 }
 
 #if defined(CONFIG_GOLIOTH_SYSTEM_SETTINGS) &&	\
